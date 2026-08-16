@@ -12,8 +12,12 @@
  *      inconclusive, never as a pass.
  *
  * Signing is a separate control-plane service concern: this package never invents
- * or verifies an attestation signature, it only requires one to be provided.
+ * nor produces a signature, but it DOES verify the injected attestation. An
+ * @duplocode/attestation verifier is required, so a structurally valid attestation
+ * reference can never authorize on its own — only a signature that verifies under a
+ * trusted, controlled issuer can.
  */
 export * from './transitions.js'
 export * from './ports.js'
 export * from './run-service.js'
+export * from '@duplocode/attestation'

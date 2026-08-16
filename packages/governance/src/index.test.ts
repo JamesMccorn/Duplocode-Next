@@ -1,9 +1,27 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import type { ArtifactReference, Evidence, ExecutionComposition, Run, Sha256Digest, WorkProposal } from '@duplocode/contracts'
+import type {
+  AttestationPayload,
+  AttestationVerifier,
+  SignedAttestation
+} from '@duplocode/attestation'
+import {
+  createAttestationSigner,
+  createAttestationVerifier,
+  createHmacSha256Scheme
+} from '@duplocode/attestation'
+import type {
+  ArtifactReference,
+  Evidence,
+  ExecutionComposition,
+  Run,
+  Sha256Digest,
+  WorkProposal
+} from '@duplocode/contracts'
 import { digestRunComposition, type CanonicalJson } from '@duplocode/composition'
 import {
+  type RunServiceConfig,
   type RunService,
   createMemoryApprovalRepository,
   createMemoryEvidenceRepository,
@@ -17,6 +35,34 @@ const FIXED_CLOCK = () => '2020-01-01T00:00:00.000Z'
 
 const sha = (bytes: string): Sha256Digest => `sha256:${bytes.repeat(64).slice(0, 64)}`
 
+// --- Attestation control-plane boundary (injected into the service) -----------
+// governance verifies the attestation; the control plane owns the signing key.
+const scheme = createHmacSha256Scheme()
+const CONTROL_PLANE_ISSUER = 'control-plane/attestation-service'
+const CONTROL_PLANE_KEY = 'cp-signing-key-1'
+
+const rogueIssuer = 'control-plane/rogue'
+const rogueKey = 'not-a-trusted-key'
+
+/** A verifier trusting the real control plane but nothing else. */
+function trustedVerifier(trusts: ReadonlyMap<string, string> = new Map([[CONTROL_PLANE_ISSUER, CONTROL_PLANE_KEY]])): AttestationVerifier {
+  return createAttestationVerifier({
+    trustedIssuers: trusts,
+    schemes: new Map([[scheme.id, scheme]])
+  })
+}
+
+/** Sign a binding exactly as the service asserts it. */
+function sign(binding: { runId: string; policyVersion: string; evidenceId: string; issuer: string }, key = CONTROL_PLANE_KEY): SignedAttestation {
+  const payload: AttestationPayload = {
+    runId: binding.runId,
+    policyVersion: binding.policyVersion,
+    decisiveEvidenceIds: [binding.evidenceId],
+    issuer: binding.issuer
+  }
+  return createAttestationSigner(scheme, key).sign(payload)
+}
+
 function makeComposition(overrides: Partial<ExecutionComposition> = {}): ExecutionComposition {
   return {
     dshRevision: 'dsh@abc',
@@ -27,7 +73,7 @@ function makeComposition(overrides: Partial<ExecutionComposition> = {}): Executi
     modelRoute: 'ollama:local/gpt',
     policyVersion: 'policy-1',
     verificationSpecDigest: sha('d'),
-    ...overrides
+     ...overrides
   }
 }
 
@@ -41,18 +87,20 @@ function makeProposal(overrides: Partial<WorkProposal> = {}): WorkProposal {
     scope: 'implement feature',
     repositoryCommit: 'deadbeef',
     requestedComposition: makeComposition(),
-    ...overrides
+     ...overrides
   }
 }
 
-function makeService(approved: readonly string[] = ['verifier-trusted']): RunService {
-  return createRunService({
+function makeService(config: { approved?: readonly string[]; verifier?: AttestationVerifier } = {}): RunService {
+  const serviceConfig: RunServiceConfig = {
     runs: createMemoryRunRepository(),
     evidence: createMemoryEvidenceRepository(),
     verdicts: createMemoryVerdictRepository(),
-    approvals: createMemoryApprovalRepository(approved),
+    approvals: createMemoryApprovalRepository(config.approved ?? ['verifier-trusted']),
+    verifier: config.verifier ?? trustedVerifier(),
     now: FIXED_CLOCK
-  })
+  }
+  return createRunService(serviceConfig)
 }
 
 function closedDigest(proposal: WorkProposal): Sha256Digest {
@@ -84,11 +132,11 @@ function makeEvidence(run: Run, overrides: Partial<Evidence> = {}): Evidence {
     artifactReferences: [],
     receiptIds: [],
     observedAt: '2020-01-01T00:00:00.000Z',
-    ...overrides
+     ...overrides
   }
 }
 
-function attestation(): ArtifactReference {
+function reference(): ArtifactReference {
   return { digest: sha('0'), mediaType: 'application/duplocode-attestation+json', uri: 'attestations/run-wp-1/decision' }
 }
 
@@ -149,21 +197,27 @@ test('illegal and terminal transitions are rejected', () => {
 test('unknown run ids raise', () => {
   const service = makeService()
   assert.throws(() => service.applyTransition('run-missing', 'leased'), /Unknown run/)
-  assert.throws(() => service.attemptPublication({ runId: 'run-missing', attestation: attestation(), issuer: 'ctl' }), /Unknown run/)
+  assert.throws(
+    () => service.attemptPublication({ runId: 'run-missing', attestation: reference(), signed: sign({ runId: 'run-missing', policyVersion: 'policy-1', evidenceId: 'ev-1', issuer: CONTROL_PLANE_ISSUER }), issuer: CONTROL_PLANE_ISSUER }),
+    /Unknown run/
+  )
 })
 
-test('happy path: decisive pass on independent trusted evidence authorizes publication', () => {
+test('happy path: a validly signed, trusted attestation authorizes a decisive pass', () => {
   const service = makeService()
   const run = runToVerifying(service, service.admit(makeProposal()))
   const evidence = makeEvidence(run)
   service.recordEvidence(evidence)
   service.recordVerdict({ evidenceId: evidence.id, kind: 'pass', reason: 'all checks pass' })
 
+  const signed = sign({ runId: run.id, policyVersion: 'policy-1', evidenceId: evidence.id, issuer: CONTROL_PLANE_ISSUER })
+
   const outcome = service.attemptPublication({
     runId: run.id,
     evidenceId: evidence.id,
-    attestation: attestation(),
-    issuer: 'control-plane/attestation-service',
+    attestation: reference(),
+    signed,
+    issuer: CONTROL_PLANE_ISSUER,
     policyVersion: 'policy-1'
   })
 
@@ -171,8 +225,162 @@ test('happy path: decisive pass on independent trusted evidence authorizes publi
   assert.equal(outcome.decision.authorized, true)
   assert.deepEqual(outcome.decision.decisiveEvidenceIds, [evidence.id])
   assert.equal(outcome.run.state, 'published')
-  assert.equal(outcome.decision.attestation.uri, attestation().uri)
-})
+  assert.equal(outcome.decision.attestation.uri, reference().uri)
+  // The decision records the *authenticated* issuer returned by the verifier.
+      assert.equal(outcome.decision.issuer, CONTROL_PLANE_ISSUER)
+      })
+
+test('a structurally valid attestation reference alone can never authorize', () => {
+  const service = makeService()
+  const run = runToVerifying(service, service.admit(makeProposal()))
+  const evidence = makeEvidence(run)
+  service.recordEvidence(evidence)
+  service.recordVerdict({ evidenceId: evidence.id, kind: 'pass', reason: 'ok' })
+
+  // No signed attestation supplied at all — the reference is well-formed but bare.
+  const outcome = service.attemptPublication({
+    runId: run.id,
+    evidenceId: evidence.id,
+    attestation: reference(),
+    issuer: CONTROL_PLANE_ISSUER,
+    policyVersion: 'policy-1'
+  } as any)
+
+  assert.equal(outcome.kind, 'needs-attention')
+  assert.equal(outcome.decision.authorized, false)
+  assert.equal((outcome as any).verdict.kind, 'inconclusive')
+  assert.match(outcome.decision.reason, /signed/)
+      assert.equal(service.getRun(run.id)!.state, 'needs-attention')
+      })
+
+test('an unsigned attestation fails closed and never authorizes', () => {
+  const service = makeService()
+  const run = runToVerifying(service, service.admit(makeProposal()))
+  const evidence = makeEvidence(run)
+  service.recordEvidence(evidence)
+  service.recordVerdict({ evidenceId: evidence.id, kind: 'pass', reason: 'ok' })
+
+  const signed = sign({ runId: run.id, policyVersion: 'policy-1', evidenceId: evidence.id, issuer: CONTROL_PLANE_ISSUER })
+  const unsigned: SignedAttestation = { ...signed, signature: '' }
+
+  const outcome = service.attemptPublication({
+    runId: run.id,
+    evidenceId: evidence.id,
+    attestation: reference(),
+    signed: unsigned,
+    issuer: CONTROL_PLANE_ISSUER,
+    policyVersion: 'policy-1'
+  })
+
+  assert.notEqual(outcome.kind, 'authorized')
+  assert.equal(outcome.decision.authorized, false)
+  assert.match(outcome.decision.reason, /unsigned/i)
+      assert.equal((outcome as any).verdict.kind, 'inconclusive')
+      assert.equal(service.getRun(run.id)!.state, 'needs-attention')
+      })
+
+test('an attestation from an untrusted issuer fails closed and never authorizes', () => {
+  const service = makeService()
+  const run = runToVerifying(service, service.admit(makeProposal()))
+  const evidence = makeEvidence(run)
+  service.recordEvidence(evidence)
+  service.recordVerdict({ evidenceId: evidence.id, kind: 'pass', reason: 'ok' })
+
+      // The rogue issuer is not in the verifier's trust map at all.
+  const signed = sign({ runId: run.id, policyVersion: 'policy-1', evidenceId: evidence.id, issuer: rogueIssuer }, rogueKey)
+
+  const outcome = service.attemptPublication({
+    runId: run.id,
+    evidenceId: evidence.id,
+    attestation: reference(),
+    signed,
+    issuer: rogueIssuer,
+    policyVersion: 'policy-1'
+  })
+
+  assert.notEqual(outcome.kind, 'authorized')
+  assert.equal(outcome.decision.authorized, false)
+      assert.match(outcome.decision.reason, /untrusted|not trusted/i)
+      assert.equal((outcome as any).verdict.kind, 'inconclusive')
+      })
+
+test('a forged signature does not verify and never authorizes', () => {
+  const service = makeService()
+  const run = runToVerifying(service, service.admit(makeProposal()))
+  const evidence = makeEvidence(run)
+  service.recordEvidence(evidence)
+  service.recordVerdict({ evidenceId: evidence.id, kind: 'pass', reason: 'ok' })
+
+      // Impersonates the trusted issuer but signs with a key the verifier does not have.
+  const forged = sign({ runId: run.id, policyVersion: 'policy-1', evidenceId: evidence.id, issuer: CONTROL_PLANE_ISSUER }, rogueKey)
+
+  const outcome = service.attemptPublication({
+    runId: run.id,
+    evidenceId: evidence.id,
+    attestation: reference(),
+    signed: forged,
+    issuer: CONTROL_PLANE_ISSUER,
+    policyVersion: 'policy-1'
+  })
+
+  assert.notEqual(outcome.kind, 'authorized')
+  assert.equal(outcome.decision.authorized, false)
+      assert.match(outcome.decision.reason, /signature/i)
+      assert.equal((outcome as any).verdict.kind, 'inconclusive')
+      })
+
+test('a payload mismatch against the asserted binding fails closed', () => {
+  const service = makeService()
+  const run = runToVerifying(service, service.admit(makeProposal()))
+  const evidence = makeEvidence(run)
+  service.recordEvidence(evidence)
+  service.recordVerdict({ evidenceId: evidence.id, kind: 'pass', reason: 'ok' })
+
+      // Sign a DIFFERENT evidence set, then try to publish with the real one.
+  const signed = sign({ runId: run.id, policyVersion: 'policy-1', evidenceId: 'ev-not-this', issuer: CONTROL_PLANE_ISSUER })
+
+  const outcome = service.attemptPublication({
+    runId: run.id,
+    evidenceId: evidence.id,
+    attestation: reference(),
+    signed,
+    issuer: CONTROL_PLANE_ISSUER,
+    policyVersion: 'policy-1'
+  })
+
+  assert.notEqual(outcome.kind, 'authorized')
+  assert.equal(outcome.decision.authorized, false)
+      assert.equal((outcome as any).verdict.kind, 'inconclusive')
+      })
+
+test('a missing verifier fails closed: even a signed attestation cannot authorize', () => {
+  const service = createRunService({
+    runs: createMemoryRunRepository(),
+    evidence: createMemoryEvidenceRepository(),
+    verdicts: createMemoryVerdictRepository(),
+    approvals: createMemoryApprovalRepository(['verifier-trusted']),
+    verifier: undefined as unknown as AttestationVerifier,
+    now: FIXED_CLOCK
+   })
+  const run = runToVerifying(service, service.admit(makeProposal()))
+  const evidence = makeEvidence(run)
+  service.recordEvidence(evidence)
+  service.recordVerdict({ evidenceId: evidence.id, kind: 'pass', reason: 'ok' })
+
+  const signed = sign({ runId: run.id, policyVersion: 'policy-1', evidenceId: evidence.id, issuer: CONTROL_PLANE_ISSUER })
+  const outcome = service.attemptPublication({
+    runId: run.id,
+    evidenceId: evidence.id,
+    attestation: reference(),
+    signed,
+    issuer: CONTROL_PLANE_ISSUER,
+    policyVersion: 'policy-1'
+  })
+
+  assert.notEqual(outcome.kind, 'authorized')
+  assert.equal(outcome.decision.authorized, false)
+      assert.match(outcome.decision.reason, /verifier/i)
+      })
 
 test('decisive pass without a well-formed control-plane attestation is refused, never authorized', () => {
   const service = makeService()
@@ -181,13 +389,19 @@ test('decisive pass without a well-formed control-plane attestation is refused, 
   service.recordEvidence(evidence)
   service.recordVerdict({ evidenceId: evidence.id, kind: 'pass', reason: 'ok' })
 
-  const outcome = service.attemptPublication({ runId: run.id, evidenceId: evidence.id, attestation: malformedAttestation(), issuer: 'ctl' })
-  assert.equal(outcome.kind, 'needs-attention')
-  assert.equal(outcome.decision.authorized, false)
-  assert.equal(outcome.verdict.kind, 'inconclusive')
-  assert.equal(service.getRun(run.id)!.state, 'needs-attention')
-  assert.match(outcome.decision.reason, /attestation/)
-})
+  const outcome = service.attemptPublication({
+    runId: run.id,
+    evidenceId: evidence.id,
+    attestation: malformedAttestation(),
+    signed: sign({ runId: run.id, policyVersion: 'policy-1', evidenceId: evidence.id, issuer: CONTROL_PLANE_ISSUER }),
+    issuer: CONTROL_PLANE_ISSUER
+  })
+      assert.equal(outcome.kind, 'needs-attention')
+      assert.equal(outcome.decision.authorized, false)
+      assert.equal((outcome as any).verdict.kind, 'inconclusive')
+      assert.equal(service.getRun(run.id)!.state, 'needs-attention')
+      assert.match(outcome.decision.reason, /attestation/)
+      })
 
 test('unrun evidence is surfaced as needs-attention / inconclusive, never pass', () => {
   const service = makeService()
@@ -196,22 +410,32 @@ test('unrun evidence is surfaced as needs-attention / inconclusive, never pass',
   service.recordEvidence(evidence)
   service.recordVerdict({ evidenceId: evidence.id, kind: 'inconclusive', reason: 'did not run' })
 
-  const outcome = service.attemptPublication({ runId: run.id, evidenceId: evidence.id, attestation: attestation(), issuer: 'ctl' })
-  assert.equal(outcome.kind, 'needs-attention')
-  assert.equal(outcome.decision.authorized, false)
-  assert.equal(outcome.verdict.kind, 'inconclusive')
-  assert.equal(service.getRun(run.id)!.state, 'needs-attention')
-})
+  const outcome = service.attemptPublication({
+    runId: run.id,
+    evidenceId: evidence.id,
+    attestation: reference(),
+    signed: sign({ runId: run.id, policyVersion: 'policy-1', evidenceId: evidence.id, issuer: CONTROL_PLANE_ISSUER }),
+    issuer: CONTROL_PLANE_ISSUER
+  })
+      assert.equal(outcome.kind, 'needs-attention')
+      assert.equal(outcome.decision.authorized, false)
+      assert.equal((outcome as any).verdict.kind, 'inconclusive')
+      assert.equal(service.getRun(run.id)!.state, 'needs-attention')
+      })
 
 test('unavailable evidence is surfaced as needs-attention / inconclusive', () => {
   const service = makeService()
   const run = runToVerifying(service, service.admit(makeProposal()))
-  const outcome = service.attemptPublication({ runId: run.id, attestation: attestation(), issuer: 'ctl' })
-  assert.equal(outcome.kind, 'needs-attention')
-  assert.equal(outcome.decision.authorized, false)
-  assert.equal(outcome.verdict.kind, 'inconclusive')
-  assert.match(outcome.decision.reason, /unavailable/)
-})
+  const outcome = service.attemptPublication({
+    runId: run.id,
+    attestation: reference(),
+    issuer: CONTROL_PLANE_ISSUER
+  } as any)
+      assert.equal(outcome.kind, 'needs-attention')
+      assert.equal(outcome.decision.authorized, false)
+      assert.equal((outcome as any).verdict.kind, 'inconclusive')
+      assert.match(outcome.decision.reason, /unavailable/)
+      })
 
 test('a non-independent verifier (its composition matches the producer) fails closed to needs-attention', () => {
   const service = makeService()
@@ -220,23 +444,35 @@ test('a non-independent verifier (its composition matches the producer) fails cl
   service.recordEvidence(evidence)
   service.recordVerdict({ evidenceId: evidence.id, kind: 'pass', reason: 'ok' })
 
-  const outcome = service.attemptPublication({ runId: run.id, evidenceId: evidence.id, attestation: attestation(), issuer: 'ctl' })
-  assert.equal(outcome.kind, 'needs-attention')
-  assert.equal(outcome.decision.authorized, false)
-  assert.equal(outcome.verdict.kind, 'inconclusive')
-})
+  const outcome = service.attemptPublication({
+    runId: run.id,
+    evidenceId: evidence.id,
+    attestation: reference(),
+    signed: sign({ runId: run.id, policyVersion: 'policy-1', evidenceId: evidence.id, issuer: CONTROL_PLANE_ISSUER }),
+    issuer: CONTROL_PLANE_ISSUER
+  })
+      assert.equal(outcome.kind, 'needs-attention')
+      assert.equal(outcome.decision.authorized, false)
+      assert.equal((outcome as any).verdict.kind, 'inconclusive')
+      })
 
 test('an untrusted verifier (not approved) fails closed and never authorizes', () => {
-  const service = makeService(['verifier-trusted'])
+  const service = makeService({ approved: ['verifier-trusted'] })
   const run = runToVerifying(service, service.admit(makeProposal()))
   const evidence = makeEvidence(run, { verifierId: 'verifier-rogue' })
   service.recordEvidence(evidence)
   service.recordVerdict({ evidenceId: evidence.id, kind: 'pass', reason: 'ok' })
 
-  const outcome = service.attemptPublication({ runId: run.id, evidenceId: evidence.id, attestation: attestation(), issuer: 'ctl' })
-  assert.equal(outcome.decision.authorized, false)
-  assert.notEqual(outcome.kind, 'authorized')
-})
+  const outcome = service.attemptPublication({
+    runId: run.id,
+    evidenceId: evidence.id,
+    attestation: reference(),
+    signed: sign({ runId: run.id, policyVersion: 'policy-1', evidenceId: evidence.id, issuer: CONTROL_PLANE_ISSUER }),
+    issuer: CONTROL_PLANE_ISSUER
+  })
+      assert.equal(outcome.decision.authorized, false)
+      assert.notEqual(outcome.kind, 'authorized')
+      })
 
 test('a genuine fail verdict from a trusted independent verifier is a terminal refusal', () => {
   const service = makeService()
@@ -245,12 +481,18 @@ test('a genuine fail verdict from a trusted independent verifier is a terminal r
   service.recordEvidence(evidence)
   service.recordVerdict({ evidenceId: evidence.id, kind: 'fail', reason: 'check 3 failed' })
 
-  const outcome = service.attemptPublication({ runId: run.id, evidenceId: evidence.id, attestation: attestation(), issuer: 'ctl' })
-  assert.equal(outcome.kind, 'refused')
-  assert.equal(outcome.decision.authorized, false)
-  assert.equal(outcome.verdict.kind, 'fail')
-  assert.equal(service.getRun(run.id)!.state, 'refused')
-})
+  const outcome = service.attemptPublication({
+    runId: run.id,
+    evidenceId: evidence.id,
+    attestation: reference(),
+    signed: sign({ runId: run.id, policyVersion: 'policy-1', evidenceId: evidence.id, issuer: CONTROL_PLANE_ISSUER }),
+    issuer: CONTROL_PLANE_ISSUER
+  })
+      assert.equal(outcome.kind, 'refused')
+      assert.equal(outcome.decision.authorized, false)
+      assert.equal((outcome as any).verdict.kind, 'fail')
+      assert.equal(service.getRun(run.id)!.state, 'refused')
+      })
 
 test('evidence bound to another run cannot authorize this run', () => {
   const service = makeService()
@@ -260,18 +502,32 @@ test('evidence bound to another run cannot authorize this run', () => {
   service.recordEvidence(evidence)
   service.recordVerdict({ evidenceId: evidence.id, kind: 'pass', reason: 'ok' })
 
-  const outcome = service.attemptPublication({ runId: run.id, evidenceId: evidence.id, attestation: attestation(), issuer: 'ctl' })
-  assert.equal(outcome.decision.authorized, false)
-  assert.match(outcome.decision.reason, /another run/)
-})
+  const outcome = service.attemptPublication({
+    runId: run.id,
+    evidenceId: evidence.id,
+    attestation: reference(),
+    signed: sign({ runId: run.id, policyVersion: 'policy-1', evidenceId: evidence.id, issuer: CONTROL_PLANE_ISSUER }),
+    issuer: CONTROL_PLANE_ISSUER
+  })
+      assert.equal(outcome.decision.authorized, false)
+      assert.match(outcome.decision.reason, /another run/)
+      })
 
 test('publication is illegal from a non-verification pre-state', () => {
   const service = makeService()
   const run = service.admit(makeProposal())
-  assert.throws(() => service.attemptPublication({ runId: run.id, attestation: attestation(), issuer: 'ctl' }), IllegalTransitionError)
+  assert.throws(
+    () => service.attemptPublication({
+      runId: run.id,
+      attestation: reference(),
+      signed: sign({ runId: run.id, policyVersion: 'policy-1', evidenceId: 'ev-1', issuer: CONTROL_PLANE_ISSUER }),
+      issuer: CONTROL_PLANE_ISSUER
+    } as any),
+    IllegalTransitionError
+  )
 })
 
-test('a needs-attention run can recover through verifying and publish', () => {
+test('a needs-attention run can recover through verifying and publish on a signed attestation', () => {
   const service = makeService()
   const run = runToVerifying(service, service.admit(makeProposal()))
   service.applyTransition(run.id, 'needs-attention')
@@ -280,11 +536,19 @@ test('a needs-attention run can recover through verifying and publish', () => {
   service.recordVerdict({ evidenceId: evidence.id, kind: 'pass', reason: 'recovered' })
 
   service.applyTransition(run.id, 'verifying')
-  const outcome = service.attemptPublication({ runId: run.id, evidenceId: evidence.id, attestation: attestation(), issuer: 'ctl' })
-  assert.equal(outcome.kind, 'authorized')
-  assert.equal(outcome.run.state, 'published')
-  assert.equal(service.getRun(run.id)!.state, 'published')
-})
+  const signed = sign({ runId: run.id, policyVersion: 'policy-1', evidenceId: evidence.id, issuer: CONTROL_PLANE_ISSUER })
+  const outcome = service.attemptPublication({
+    runId: run.id,
+    evidenceId: evidence.id,
+    attestation: reference(),
+    signed,
+    issuer: CONTROL_PLANE_ISSUER,
+    policyVersion: 'policy-1'
+  })
+      assert.equal(outcome.kind, 'authorized')
+      assert.equal(outcome.run.state, 'published')
+      assert.equal(service.getRun(run.id)!.state, 'published')
+      })
 
 test('in-memory repositories are independent and deterministic', () => {
   const runsA = createMemoryRunRepository()

@@ -1,19 +1,20 @@
 {
-  "name": "@duplocode/governance",
-  "version": "0.0.0",
-  "private": true,
-  "type": "module",
-  "description": "Fail-closed run governance: admission, RunState transitions, and evidence-driven publication. Attestation signing remains a control-plane concern.",
-  "exports": "./dist/index.js",
-  "types": "./dist/index.d.ts",
-  "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --test dist/**/*.test.js",
-    "smoke": "npm run build --silent && node scripts/smoke.mjs"
-  },
-  "dependencies": {
-    "@duplocode/composition": "workspace:*",
-    "@duplocode/contracts": "workspace:*"
-  }
+   "name": "@duplocode/governance",
+   "version": "0.0.0",
+   "private": true,
+   "type": "module",
+   "description": "Fail-closed run governance: admission, RunState transitions, and evidence-driven publication. An injected @duplocode/attestation verifier authorizes only on a trusted, validly signed attestation.",
+   "exports": "./dist/index.js",
+   "types": "./dist/index.d.ts",
+   "scripts": {
+      "build": "tsc -p tsconfig.json",
+      "typecheck": "tsc -p tsconfig.json --noEmit",
+      "test": "node --test dist/**/*.test.js",
+      "smoke": "npm run build --silent && node scripts/smoke.mjs"
+   },
+   "dependencies": {
+      "@duplocode/attestation": "workspace:*",
+      "@duplocode/composition": "workspace:*",
+      "@duplocode/contracts": "workspace:*"
+   }
 }
