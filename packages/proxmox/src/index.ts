@@ -1,5 +1,17 @@
 export type LifecycleState = 'requested' | 'ready' | 'lost' | 'returned' | 'destroyed'
 
+export type {
+  ProxmoxRequest,
+  ProxmoxResponse,
+  ProxmoxTransport,
+  ProxmoxBody,
+  ProxmoxAdapterOptions,
+  JsonValue,
+  TokenScope,
+  ScopedTokenSupplier,
+} from './http-adapter.js'
+export { ProxmoxHttpAdapter } from './http-adapter.js'
+
 export interface WorkerProfile {
   readonly id: string
   readonly imageDigest: `sha256:${string}`
