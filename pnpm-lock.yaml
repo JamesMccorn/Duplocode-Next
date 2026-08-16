@@ -47,6 +47,8 @@ importers:
         specifier: workspace:*
         version: link:../contracts
 
+  packages/lease: {}
+
   packages/proxmox: {}
 
   packages/verifier:
@@ -54,6 +56,8 @@ importers:
       '@duplocode/contracts':
         specifier: workspace:*
         version: link:../contracts
+
+  packages/worker-gateway: {}
 
 packages:
 

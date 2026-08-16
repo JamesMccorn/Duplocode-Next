@@ -1,0 +1,14 @@
+{
+  "name": "@duplocode/lease",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "In-memory bounded leases for worker, model-route, and event-ingest authority. Leases require explicit limits, an issuer, a subject, and an expiry-boundary string. Validity is evaluated only against a caller-supplied time boundary: the store never reads the wall clock and never auto-expires on its own. Expired, revoked, or unknown leases surface as unavailable, never as valid.",
+  "exports": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test dist/**/*.test.js"
+  }
+}
