@@ -32,6 +32,12 @@ importers:
 
   packages/proxmox: {}
 
+  packages/verifier:
+    dependencies:
+      '@duplocode/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+
 packages:
 
   '@types/node@24.13.3':
