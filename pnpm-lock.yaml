@@ -27,6 +27,8 @@ importers:
 
   packages/dsh-control-profile: {}
 
+  packages/event-ledger: {}
+
   packages/governance:
     dependencies:
       '@duplocode/composition':

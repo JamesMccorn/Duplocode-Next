@@ -1,0 +1,2 @@
+import assert from 'node:assert/strict';import test from 'node:test';import {InMemoryEventLedger} from './index.js';
+const e={id:'e1',runId:'r',producer:'worker',trust:'untrusted-worker' as const,sequence:1,observedAt:'t',receivedAt:'t',payloadDigest:'sha256:x' as const};test('events are attributable and idempotency keys are enforced',()=>{const l=new InMemoryEventLedger();l.append(e);assert.throws(()=>l.append(e),/duplicate/);assert.equal(l.events('r').length,1)})
