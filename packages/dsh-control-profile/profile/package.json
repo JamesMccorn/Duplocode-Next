@@ -1,0 +1,14 @@
+{
+  "name": "dsh-profile-duplocode-control",
+  "private": true,
+  "description": "DuploCode control-plane DSH profile. A composition LAYER placed under $DSH_HOME/profiles/duplocode-control that selects which DSH bundles mount for an operator/worker runtime. Installing it deploys a DSH configuration; it confers NO governance authority: admission, leases, worker lifecycle, independent verification, verdicts, evidence, attestation, and publication remain owned by the @duplocode control plane and are not granted to DSH or to the dsh-web-app surface this profile mounts.",
+  "dependencies": {},
+  "dsh": {
+    "profile": {
+      "bundles": [
+        "@deepseek-ai/dsh-base",
+        "@deepseek-ai/dsh-web-app"
+      ]
+    }
+  }
+}

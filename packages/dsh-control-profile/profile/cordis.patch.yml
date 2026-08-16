@@ -1,0 +1,28 @@
+# DuploCode control-profile user patch layer.
+#
+# This layer is INTENTIONALLY EMPTY (a top-level `[]`). It declares no
+# id-targeted override, no `insert`, and no `disabled` row, so the composed
+# config is exactly the two bundle layers listed in package.json, in order:
+#   1. @deepseek-ai/dsh-base     (every profile's first layer)
+#   2. @deepseek-ai/dsh-web-app   (the browser surface)
+#
+# Trust boundary. Declaring a patch row here is a CONFIGURATION surface, never a
+# governance authority: admission, leases, worker lifecycle, independent
+# verification, verdicts, evidence, attestation, and publication are owned by the
+# @duplocode control plane. Mounting @deepseek-ai/dsh-web-app produces an
+# operator/worker UI over the runtime; it confers no publication authority and
+# cannot bypass the policy publication floor (a producer is never a publication
+# authority; a decisive verifier runs independently of the producer plane).
+#
+# A non-authoritative DuploCode plugin seam is deliberately NOT declared yet:
+# admitting an out-of-tree plugin would rely on a DSH plugin API this package has
+# not verified, and it is a separate, reviewed deliverable. This file stays empty
+# until that bundle exists and is reviewed.
+#
+# Format contract. DSH's profile loader (`@deepseek-ai/dsh-app-boot`) parses this
+# file with `loadOptionalPatches`: a top-level YAML array of loader patch entries.
+# A MISSING or comments-only file makes boot throw; an empty list (`[]`) is the
+# canonical "no user patches." Do not delete this file or reduce it to comments
+# only — keep the `[]`.
+
+[]

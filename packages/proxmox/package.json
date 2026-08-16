@@ -1,0 +1,14 @@
+{
+   "name": "@duplocode/proxmox",
+   "version": "0.0.0",
+   "private": true,
+   "type": "module",
+   "description": "Narrow Proxmox worker-launcher boundary: immutable approved worker profiles, lifecycle receipts, and an HTTP adapter that never carries a raw admin token in a worker request.",
+   "exports": "./dist/index.js",
+   "types": "./dist/index.d.ts",
+   "scripts": {
+      "build": "tsc -p tsconfig.json",
+      "typecheck": "tsc -p tsconfig.json --noEmit",
+      "test": "node --test dist/**/*.test.js"
+   }
+}

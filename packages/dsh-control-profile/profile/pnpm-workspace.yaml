@@ -1,0 +1,19 @@
+# DSH profile pnpm settings. This is a byte-for-byte mirror of the file DSH's
+# `initProfile` writes when it first creates a profile, so an `install` here
+# behaves exactly like a `dsh plugin --profile duplocode-control add <pkg>` run.
+#
+# It is INERT for this profile as written: the profile's `dependencies` is empty
+# and both bundles (@deepseek-ai/dsh-base, @deepseek-ai/dsh-web-app) are in-box,
+# so they resolve from the dsh installation and nothing out-of-tree is installed.
+# These settings become load-bearing only if a future, reviewed, non-authoritative
+# DuploCode plugin bundle is added via `dsh plugin --profile duplocode-control
+# add <pkg>`; until then, do not add a dependency that grants authority.
+#
+# In the DuploCode monorepo this file is inert too: pnpm reads workspace settings
+# only from the repository-root pnpm-workspace.yaml. It is meaningful solely when
+# copied into $DSH_HOME/profiles/duplocode-control/ (see the README).
+packages:
+  - .
+
+nodeLinker: hoisted
+autoInstallPeers: false

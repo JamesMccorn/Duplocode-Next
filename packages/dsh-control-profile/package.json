@@ -1,0 +1,14 @@
+{
+  "name": "@duplocode/dsh-control-profile",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Source-controlled template for the DuploCode control-plane DSH profile (a composition layer, not a governance authority). See README.md.",
+  "files": [
+     "profile",
+     "README.md"
+   ],
+  "scripts": {
+    "test": "node --test test/validate.test.js"
+   }
+}
