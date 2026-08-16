@@ -1,0 +1,14 @@
+{
+  "name": "@duplocode/fleet",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Compact fake-backed FleetSnapshot service: freshness-tagged (fresh/stale/unavailable) snapshots of endpoint model/residency/slot data, with a capacity gate that refuses stale and unavailable snapshots.",
+  "exports": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test dist/index.test.js"
+  }
+}

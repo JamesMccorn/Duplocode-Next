@@ -38,8 +38,13 @@ importers:
 
   packages/event-ledger: {}
 
+  packages/fleet: {}
+
   packages/governance:
     dependencies:
+      '@duplocode/attestation':
+        specifier: workspace:*
+        version: link:../attestation
       '@duplocode/composition':
         specifier: workspace:*
         version: link:../composition
