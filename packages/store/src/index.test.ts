@@ -1,0 +1,1 @@
+import assert from 'node:assert/strict';import test from 'node:test';import {InMemoryDurableStore} from './index.js';test('store retains versioned immutable records',()=>{const s=new InMemoryDurableStore();s.put({id:'r',version:1,body:{}});assert.throws(()=>s.put({id:'r',version:1,body:{}}));assert.equal(s.get('r')?.version,1)})

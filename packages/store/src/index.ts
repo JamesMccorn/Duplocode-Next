@@ -1,0 +1,3 @@
+export interface DurableRecord { readonly id:string; readonly version:number; readonly body:unknown }
+export interface DurableStore { put(record:DurableRecord):void; get(id:string):DurableRecord|undefined; list():readonly DurableRecord[] }
+export class InMemoryDurableStore implements DurableStore { #records=new Map<string,DurableRecord>(); put(record:DurableRecord){const current=this.#records.get(record.id);if(current&&record.version<=current.version)throw new Error('non-monotonic version');this.#records.set(record.id,Object.freeze({...record}))}get(id:string){return this.#records.get(id)}list(){return [...this.#records.values()]} }
