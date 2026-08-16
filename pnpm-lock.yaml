@@ -19,6 +19,12 @@ importers:
 
   packages/contracts: {}
 
+  packages/control-api:
+    dependencies:
+      '@duplocode/governance':
+        specifier: workspace:*
+        version: link:../governance
+
   packages/dsh-control-profile: {}
 
   packages/governance:
